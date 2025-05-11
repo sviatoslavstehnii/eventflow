@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  consul:
+    image: consul:1.15
+    ports:
+      - "8500:8500"
+      - "8600:8600/udp"
+    command: 'agent -dev -client=0.0.0.0'
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   auth-service:
     build: 
       context: ./auth-service
@@ -11,8 +23,14 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@auth-db:5432/auth_db
       - JWT_SECRET=your-secret-key
       - JWT_ALGORITHM=HS256
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - SERVICE_NAME=auth-service
+      - SERVICE_PORT=8001
     depends_on:
       auth-db:
+        condition: service_healthy
+      consul:
         condition: service_healthy
 
   event-catalog-service:
@@ -27,8 +45,14 @@ services:
       - JWT_ALGORITHM=HS256
       - AUTH_SERVICE_URL=http://auth-service:8001
       - BOOKING_SERVICE_URL=http://booking-service:8003
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - SERVICE_NAME=event-catalog-service
+      - SERVICE_PORT=8002
     depends_on:
       event-catalog-db:
+        condition: service_healthy
+      consul:
         condition: service_healthy
 
   booking-service:
@@ -43,10 +67,16 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:8001
       - EVENT_SERVICE_URL=http://event-catalog-service:8002
       - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - SERVICE_NAME=booking-service
+      - SERVICE_PORT=8003
     depends_on:
       booking-db:
         condition: service_healthy
       booking-redis:
+        condition: service_healthy
+      consul:
         condition: service_healthy
 
   # notification-service:
@@ -59,10 +89,16 @@ services:
   #     - MONGODB_URL=mongodb://notification-db:27017
   #     - DATABASE_NAME=notification_db
   #     - RABBITMQ_URL=amqp://rabbitmq:5672
+  #     - CONSUL_HOST=consul
+  #     - CONSUL_PORT=8500
+  #     - SERVICE_NAME=notification-service
+  #     - SERVICE_PORT=8004
   #   depends_on:
   #     notification-db:
   #       condition: service_healthy
   #     rabbitmq:
+  #       condition: service_healthy
+  #     consul:
   #       condition: service_healthy
 
   # Databases

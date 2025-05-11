@@ -5,8 +5,35 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from . import crud, schemas, auth
 from .database import get_database
 from typing import List, Optional
+import logging
+from .consul_client import ConsulClient
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Event Catalog Service")
+
+# Initialize Consul client
+consul_client = ConsulClient()
+
+# Register service with Consul on startup
+@app.on_event("startup")
+async def startup_event():
+    try:
+        consul_client.register_service()
+        logger.info("Service registered with Consul")
+    except Exception as e:
+        logger.error(f"Failed to register service with Consul: {str(e)}")
+
+# Deregister service from Consul on shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        consul_client.deregister_service()
+        logger.info("Service deregistered from Consul")
+    except Exception as e:
+        logger.error(f"Failed to deregister service from Consul: {str(e)}")
 
 # Add CORS middleware
 app.add_middleware(
@@ -16,6 +43,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Consul"""
+    return {"status": "healthy"}
 
 @app.get("/events/", response_model=List[schemas.Event])
 async def read_events(
