@@ -2,6 +2,8 @@ import http
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pythonjsonlogger import jsonlogger
+
 from . import crud, schemas, auth
 from .database import get_database
 from typing import List, Optional
@@ -11,6 +13,13 @@ from .consul_client import ConsulClient
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+handler = logging.StreamHandler()
+fmt = jsonlogger.JsonFormatter(
+    '%(asctime)s %(levelname)s %(name)s %(message)s %(pathname)s %(lineno)d'
+)
+handler.setFormatter(fmt)
+logger.addHandler(handler)
 
 app = FastAPI(title="Event Catalog Service")
 

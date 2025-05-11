@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from datetime import datetime
+from pythonjsonlogger import jsonlogger
 import redis
 from cassandra.cluster import Cluster
 import json
@@ -19,6 +20,14 @@ from .schemas import BookingUpdate
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+handler = logging.StreamHandler()
+fmt = jsonlogger.JsonFormatter(
+    '%(asctime)s %(levelname)s %(name)s %(message)s %(pathname)s %(lineno)d'
+)
+handler.setFormatter(fmt)
+logger.addHandler(handler)
+
 
 app = FastAPI(title="Booking Service")
 

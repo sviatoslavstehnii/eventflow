@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import Optional
 import logging
+from pythonjsonlogger import jsonlogger
+
 
 from .database import get_db, engine
 from . import models, schemas, crud
@@ -16,6 +18,14 @@ from .consul_client import ConsulClient
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+handler = logging.StreamHandler()
+fmt = jsonlogger.JsonFormatter(
+    '%(asctime)s %(levelname)s %(name)s %(message)s %(pathname)s %(lineno)d'
+)
+handler.setFormatter(fmt)
+logger.addHandler(handler)
+
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
