@@ -1,30 +1,27 @@
+from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from enum import Enum
 
-class NotificationBase(BaseModel):
+class NotificationType(str, Enum):
+    BOOKING_CONFIRMED = "booking_confirmed"
+    BOOKING_CANCELLED = "booking_cancelled"
+    EVENT_UPDATED = "event_updated"
+
+class NotificationStatus(str, Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+class NotificationCreate(BaseModel):
+    user_id: str  # User ID of the recipient
+    type: NotificationType  # Enum for notification type
+    content: str  # Notification content (message text)
+    
+class NotificationResponse(BaseModel):
     user_id: str
-    type: str
+    type: NotificationType
     content: str
-    status: str = "pending"
-
-class NotificationCreate(NotificationBase):
-    pass
-
-class Notification(NotificationBase):
-    id: str
+    status: NotificationStatus = NotificationStatus.PENDING
     created_at: datetime
     sent_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-class NotificationUpdate(BaseModel):
-    status: Optional[str] = None
-    sent_at: Optional[datetime] = None
-
-class NotificationTemplate(BaseModel):
-    type: str
-    subject: str
-    body: str
-    variables: list[str] 

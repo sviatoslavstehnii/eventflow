@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+import os
+from fastapi import FastAPI, Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Authentication Service")
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
 
 # Initialize Consul client
 consul_client = ConsulClient()
@@ -86,6 +89,21 @@ def logout(token: str = Depends(oauth2_scheme)):
 @app.get("/users/me", response_model=schemas.User)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+@app.get("/users/{user_id}", response_model=schemas.User)
+def get_user_by_id(
+    user_id: str,
+    x_internal_api_key: str = Header(...),
+    db: Session = Depends(get_db)
+):
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    user = crud.get_user(db, user_id=user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return user
 
 @app.get("/auth/validate")
 def validate_token(current_user: models.User = Depends(get_current_user)):

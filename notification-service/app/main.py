@@ -1,130 +1,87 @@
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
-from typing import List
-from datetime import datetime
+import os
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+import httpx
 import pika
 import json
-from motor.motor_asyncio import AsyncIOMotorClient
-from fastapi.middleware.cors import CORSMiddleware
 import logging
+import threading
 import asyncio
-
-from . import models, schemas
+from .consul_client import ConsulClient
 from .database import get_database
 from .notification_processor import process_notification
-from .consul_client import ConsulClient
+from .schemas import NotificationCreate, NotificationResponse, NotificationType, NotificationStatus
+from datetime import datetime
 
-# Configure logging
+app = FastAPI()
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(title="Notification Service")
-
-# Initialize Consul client
 consul_client = ConsulClient()
 
-# Register service with Consul on startup
-@app.on_event("startup")
-async def startup_event():
-    try:
-        consul_client.register_service()
-        logger.info("Service registered with Consul")
-    except Exception as e:
-        logger.error(f"Failed to register service with Consul: {str(e)}")
 
-    # Set up RabbitMQ connection and channel
-    connection = pika.BlockingConnection(
-        pika.ConnectionParameters(host='rabbitmq')
-    )
-    channel = connection.channel()
-    
-    # Declare the queue
-    channel.queue_declare(queue='notifications')
-    
-    # Set up consumer
-    def callback(ch, method, properties, body):
-        notification_data = json.loads(body)
-        # Run the async notification processor in the event loop
-        asyncio.run(process_notification(notification_data))
-    
-    channel.basic_consume(
-        queue='notifications',
-        on_message_callback=callback,
-        auto_ack=True
-    )
-    
-    # Start consuming in a separate thread
-    import threading
-    thread = threading.Thread(target=channel.start_consuming)
-    thread.daemon = True
-    thread.start()
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
 
-# Deregister service from Consul on shutdown
-@app.on_event("shutdown")
-async def shutdown_event():
-    try:
-        consul_client.deregister_service()
-        logger.info("Service deregistered from Consul")
-    except Exception as e:
-        logger.error(f"Failed to deregister service from Consul: {str(e)}")
+async def verify_user_id(user_id: str) -> bool:
+    """
+    Verifies that the user ID exists by calling the Auth Service.
+    """
+    auth_service = consul_client.get_service("auth-service")
+    if not auth_service:
+        raise HTTPException(status_code=503, detail="Auth Service unavailable")
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    url = f"http://{auth_service['host']}:{auth_service['port']}/users/{user_id}"
+    headers = {"X-Internal-API-Key": INTERNAL_API_KEY}
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            return True
+        return False
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Consul"""
     return {"status": "healthy"}
 
-@app.get("/notifications/{user_id}", response_model=List[schemas.Notification])
-async def get_user_notifications(
-    user_id: str,
-    db: AsyncIOMotorClient = Depends(get_database)
-):
-    cursor = db.notifications.find({"user_id": user_id})
-    notifications = await cursor.to_list(length=100)
-    return notifications
-
-@app.get("/notifications/status/{notification_id}", response_model=schemas.Notification)
-async def get_notification_status(
-    notification_id: str,
-    db: AsyncIOMotorClient = Depends(get_database)
-):
-    notification = await db.notifications.find_one({"_id": notification_id})
-    if not notification:
-        raise HTTPException(status_code=404, detail="Notification not found")
-    return notification
-
-@app.post("/notifications/send", response_model=schemas.Notification)
+@app.post("/notifications/send", response_model=NotificationResponse)
 async def send_notification(
-    notification: schemas.NotificationCreate,
-    background_tasks: BackgroundTasks,
-    db: AsyncIOMotorClient = Depends(get_database)
+    notification: NotificationCreate, 
+    background_tasks: BackgroundTasks
 ):
-    notification_dict = notification.dict()
-    notification_dict["created_at"] = datetime.utcnow()
+    # Verify the user ID before sending the notification
+    if not await verify_user_id(notification.user_id):
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+
+    notification_data = {
+        "user_id": notification.user_id,
+        "type": notification.type,
+        "content": notification.content,
+        "status": NotificationStatus.PENDING,
+        "created_at": datetime.utcnow()
+    }
     
-    # Store notification in MongoDB
-    result = await db.notifications.insert_one(notification_dict)
-    notification_dict["id"] = str(result.inserted_id)
-    
-    # Send to RabbitMQ for processing
-    connection = pika.BlockingConnection(
-        pika.ConnectionParameters(host='rabbitmq')
-    )
+    background_tasks.add_task(process_notification, notification_data)
+    return notification_data
+
+def start_rabbitmq_consumer():
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='rabbitmq'))
     channel = connection.channel()
-    
-    channel.basic_publish(
-        exchange='',
-        routing_key='notifications',
-        body=json.dumps(notification_dict)
-    )
-    
-    connection.close()
-    
-    return notification_dict 
+    channel.queue_declare(queue="notifications", durable=True)
+    logging.info("Connected to RabbitMQ")
+
+    def callback(ch, method, properties, body):
+        notification = json.loads(body)
+        asyncio.run(process_notification(notification))
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    channel.basic_consume(queue="notifications", on_message_callback=callback)
+    logging.info("Notification Service is now consuming notifications...")
+    channel.start_consuming()
+
+@app.on_event("startup")
+async def startup_event():
+    # Run the RabbitMQ consumer in a separate thread
+    consumer_thread = threading.Thread(target=start_rabbitmq_consumer, daemon=True)
+    consumer_thread.start()
+    logging.info("RabbitMQ consumer thread started")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logging.info("Notification Service is shutting down")

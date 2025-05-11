@@ -27,6 +27,7 @@ services:
       - CONSUL_PORT=8500
       - SERVICE_NAME=auth-service
       - SERVICE_PORT=8001
+      - INTERNAL_API_KEY=super-secure-api-key
     depends_on:
       auth-db:
         condition: service_healthy
@@ -124,22 +125,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-  
-  notification-service:
-    build:
-      context: ./notification-service
-      dockerfile: Dockerfile
+
+  rabbitmq:
+    image: rabbitmq:3-management
     ports:
-      - "8004:8004"
+      - "5672:5672"
+      - "15672:15672"
     environment:
-      - MONGODB_URL=mongodb://notification-db:27017
-      - DATABASE_NAME=notification_db
-      - RABBITMQ_URL=amqp://rabbitmq:5672
-    depends_on:
-      notification-db:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   notification-db:
     image: mongo:6
@@ -151,18 +150,25 @@ services:
       timeout: 5s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:3-management
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
     ports:
-      - "5672:5672"
-      - "15672:15672"
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - "8004:8004"
+    environment:
+      - MONGODB_URL=mongodb://notification-db:27017
+      - DATABASE_NAME=notification_db
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - SMTP_USER=your-email@gmail.com
+      - SMTP_PASS=your-password
+      - INTERNAL_API_KEY=super-secure-api-key
+    depends_on:
+      - notification-db
+      - rabbitmq
 
 volumes:
   auth-db-data:
