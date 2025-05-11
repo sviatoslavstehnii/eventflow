@@ -9,6 +9,7 @@ import logging
 from .database import get_db, engine
 from . import models, schemas, crud
 from .auth import create_access_token, get_current_user
+from .auth import oauth2_scheme, revoked_tokens
 from .consul_client import ConsulClient
 
 # Configure logging
@@ -77,10 +78,15 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     access_token = create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
 
+@app.post("/auth/logout")
+def logout(token: str = Depends(oauth2_scheme)):
+    revoked_tokens.add(token)
+    return {"msg": "Token has been revoked; you have been logged out"}
+
 @app.get("/users/me", response_model=schemas.User)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
 @app.get("/auth/validate")
 def validate_token(current_user: models.User = Depends(get_current_user)):
-    return {"valid": True, "user": current_user} 
+    return {"valid": True, "user": current_user}
