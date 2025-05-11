@@ -28,4 +28,8 @@ class Booking(BookingBase):
         }
 
 class BookingResponse(Booking):
-    event_details: Optional[Dict[str, Any]] = None 
+    event_details: Optional[Dict[str, Any]] = None
+
+class BookingUpdate(BaseModel):
+    """Fields allowed for partial update on a booking."""
+    status: Optional[str] = None

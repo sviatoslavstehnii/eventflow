@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 import asyncio
 
-from . import models, schemas, crud
+from . import models, schemas
 from .database import get_database
 from .notification_processor import process_notification
 from .consul_client import ConsulClient

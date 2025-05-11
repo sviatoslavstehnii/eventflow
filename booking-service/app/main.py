@@ -14,6 +14,7 @@ from .auth import get_current_user
 from .notification import send_booking_notification
 from .event_client import get_event_details, update_event_capacity
 from .consul_client import ConsulClient
+from .schemas import BookingUpdate
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,9 +56,6 @@ app.add_middleware(
 async def health_check():
     """Health check endpoint for Consul"""
     return {"status": "healthy"}
-
-
-
 
 @app.post("/bookings", response_model=schemas.Booking)
 async def create_booking(
@@ -193,6 +191,45 @@ async def get_event_bookings(
         bookings.append(booking_dict)
     
     return bookings
+
+@app.patch("/bookings/{booking_id}", response_model=schemas.Booking)
+async def edit_booking(
+    booking_id: str,
+    update: BookingUpdate,
+    current_user: dict = Depends(get_current_user),
+    cassandra_session = Depends(get_cassandra)
+):
+    # 1) Fetch existing booking
+    row = cassandra_session.execute(
+        "SELECT * FROM bookings WHERE id = %s", (booking_id,)
+    ).one()
+    if not row:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    # 2) Authorization: only owner can edit
+    if row.user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to update this booking")
+
+    # 3) Apply updates (only status for now)
+    new_status = update.status or row.status
+    now = datetime.utcnow()
+    cassandra_session.execute(
+        """
+        UPDATE bookings
+        SET status = %s, updated_at = %s
+        WHERE id = %s
+        """,
+        (new_status, now, booking_id)
+    )
+
+    # 4) Return the updated record
+    return {
+        "id": row.id,
+        "event_id": row.event_id,
+        "user_id": row.user_id,
+        "status": new_status,
+        "created_at": row.created_at,
+        "updated_at": now
+    }
 
 @app.delete("/bookings/{booking_id}")
 async def cancel_booking(

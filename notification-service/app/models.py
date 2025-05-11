@@ -13,6 +13,15 @@ class PyObjectId(ObjectId):
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid ObjectId")
         return ObjectId(v)
+    
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        """
+        Provide JSON schema for this custom type in Pydantic v2.
+        """
+        string_schema = handler(str)
+        string_schema.update(type="string")
+        return string_schema
 
     @classmethod
     def __modify_schema__(cls, field_schema):
