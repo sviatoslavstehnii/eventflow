@@ -17,8 +17,9 @@ logger = logging.getLogger("auth-dep")
 # JWT Configuration
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+AUTH_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8001")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=AUTH_URL+"/auth/login")
 consul_client = ConsulClient()
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
