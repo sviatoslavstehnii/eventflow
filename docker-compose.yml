@@ -43,8 +43,8 @@ services:
       - MONGODB_URL=mongodb://event-catalog-db:27017
       - JWT_SECRET=your-secret-key
       - JWT_ALGORITHM=HS256
-      - AUTH_SERVICE_URL=http://auth-service:8001
-      - BOOKING_SERVICE_URL=http://booking-service:8003
+      - AUTH_SERVICE_URL=http://localhost:8001
+      - BOOKING_SERVICE_URL=http://localhost:8003
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
       - SERVICE_NAME=event-catalog-service
@@ -64,9 +64,9 @@ services:
     environment:
       - CASSANDRA_HOSTS=booking-db
       - REDIS_URL=redis://booking-redis:6379/0
-      - AUTH_SERVICE_URL=http://auth-service:8001
-      - EVENT_SERVICE_URL=http://event-catalog-service:8002
-      - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+      - AUTH_SERVICE_URL=http://localhost:8001
+      - EVENT_SERVICE_URL=http://localhost:8002
+      - NOTIFICATION_SERVICE_URL=http://localhost:8004
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
       - SERVICE_NAME=booking-service
