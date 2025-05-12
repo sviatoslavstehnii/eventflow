@@ -61,7 +61,6 @@ class EventCapacityUpdate(BaseModel):
 
 class Event(EventBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    current_bookings: int
     organizer_id: str
     is_active: bool
     created_at: datetime

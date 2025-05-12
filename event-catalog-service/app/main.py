@@ -103,18 +103,3 @@ async def delete_event(
     success = await crud.delete_event(db=db, event_id=event_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete event")
-
-@app.post("/events/{event_id}/book")
-async def book_event(
-    event_id: str,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(auth.get_current_user)
-):
-    result = await crud.book_event(db, event_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Event not found")
-    
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["message"])
-    
-    return {"message": result["message"]}

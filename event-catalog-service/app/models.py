@@ -28,7 +28,6 @@ class EventModel(BaseModel):
     start_time: datetime
     end_time: datetime
     capacity: int
-    current_bookings: int = 0
     price: float
     organizer_id: str
     is_active: bool = True
