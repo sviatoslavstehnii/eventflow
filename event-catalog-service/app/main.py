@@ -104,24 +104,17 @@ async def delete_event(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete event")
 
-@app.put("/events/{event_id}/capacity", response_model=schemas.Event)
-async def update_event_capacity(
+@app.post("/events/{event_id}/book")
+async def book_event(
     event_id: str,
-    capacity_update: schemas.EventCapacityUpdate,
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_user: dict = Depends(auth.get_current_user)
 ):
-    event = await crud.get_event(db, event_id)
-    if event is None:
+    result = await crud.book_event(db, event_id)
+    if not result:
         raise HTTPException(status_code=404, detail="Event not found")
     
-    updated_event = await crud.update_event_capacity(
-        db=db,
-        event_id=event_id,
-        increment=capacity_update.increment
-    )
-    if updated_event is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot update capacity: event is full or has no bookings"
-        )
-    return updated_event 
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    
+    return {"message": result["message"]}

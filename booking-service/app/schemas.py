@@ -1,10 +1,14 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
+from enum import Enum
+
+class BookingStatus(str, Enum):
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
 
 class BookingBase(BaseModel):
     event_id: str
-    status: str = "pending"
 
 class BookingCreate(BookingBase):
     pass
@@ -12,6 +16,7 @@ class BookingCreate(BookingBase):
 class Booking(BookingBase):
     id: str
     user_id: str
+    status: BookingStatus = BookingStatus.CONFIRMED
     created_at: datetime
     updated_at: datetime
 
@@ -27,9 +32,14 @@ class Booking(BookingBase):
             }
         }
 
-class BookingResponse(Booking):
+class BookingResponse(BaseModel):
+    id: str
+    event_id: str
+    user_id: str
+    status: BookingStatus
+    created_at: datetime
+    updated_at: datetime
     event_details: Optional[Dict[str, Any]] = None
 
-class BookingUpdate(BaseModel):
-    """Fields allowed for partial update on a booking."""
-    status: Optional[str] = None
+    class Config:
+        orm_mode = True

@@ -65,4 +65,22 @@ async def update_event_capacity(db: AsyncIOMotorDatabase, event_id: str, increme
 
 async def delete_event(db: AsyncIOMotorDatabase, event_id: str):
     result = await db.events.delete_one({"_id": ObjectId(event_id)})
-    return result.deleted_count > 0 
+    return result.deleted_count > 0
+
+async def book_event(db: AsyncIOMotorDatabase, event_id: str):
+    event = await get_event(db, event_id)
+    if not event:
+        return None
+    
+    if event["current_bookings"] >= event["capacity"]:
+        return {"success": False, "message": "Event is full"}
+    
+    result = await db.events.update_one(
+        {"_id": ObjectId(event_id), "current_bookings": {"$lt": event["capacity"]}},
+        {"$inc": {"current_bookings": 1}, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    if result.modified_count == 0:
+        return {"success": False, "message": "Event is full"}
+    
+    return {"success": True, "message": "Booking successful"}

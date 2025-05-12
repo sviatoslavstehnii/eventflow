@@ -7,7 +7,6 @@ import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -25,13 +24,13 @@ def get_redis():
         redis_client.close()
 
 def get_cassandra():
-    logger.info(f"Connecting to Cassandra at hosts: {CASSANDRA_HOSTS}")
+    logging.info(f"Connecting to Cassandra at hosts: {CASSANDRA_HOSTS}")
     
     # Create Cassandra cluster
     cluster = Cluster(CASSANDRA_HOSTS)
     session = cluster.connect()
     
-    logger.info("Connected to Cassandra cluster")
+    logging.info("Connected to Cassandra cluster")
     
     # Create keyspace if it doesn't exist
     session.execute("""
@@ -41,7 +40,7 @@ def get_cassandra():
     
     # Use the keyspace
     session.set_keyspace('eventflow')
-    logger.info("Using keyspace: eventflow")
+    logging.info("Using keyspace: eventflow")
     
     # Create bookings table if it doesn't exist
     session.execute("""
@@ -54,7 +53,7 @@ def get_cassandra():
             updated_at timestamp
         )
     """)
-    logger.info("Ensured bookings table exists")
+    logging.info("Ensured bookings table exists")
     
     # Create secondary indexes if they don't exist
     try:
@@ -64,13 +63,13 @@ def get_cassandra():
         session.execute("""
             CREATE INDEX IF NOT EXISTS ON bookings (user_id)
         """)
-        logger.info("Ensured secondary indexes exist")
+        logging.info("Ensured secondary indexes exist")
     except Exception as e:
-        logger.warning(f"Index creation warning (can be ignored if indexes already exist): {str(e)}")
+        logging.warning(f"Index creation warning (can be ignored if indexes already exist): {str(e)}")
     
     try:
         yield session
     finally:
-        logger.info("Closing Cassandra connection")
+        logging.info("Closing Cassandra connection")
         session.shutdown()
         cluster.shutdown() 
