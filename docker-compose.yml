@@ -163,8 +163,8 @@ services:
       - RABBITMQ_PORT=5672
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
-      - SMTP_USER=your-email@gmail.com
-      - SMTP_PASS=your-password
+      - SMTP_USER=eventflow.ucu@gmail.com
+      - SMTP_PASS=qipj smqk jehm ziqa
       - INTERNAL_API_KEY=super-secure-api-key
     depends_on:
       - notification-db

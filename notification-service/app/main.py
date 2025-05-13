@@ -33,6 +33,10 @@ async def verify_user_id(user_id: str) -> bool:
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
         if response.status_code == 200:
+            user_data = response.json()
+            global user_email
+            user_email = user_data.get("email")
+            logging.info(f"User ID {user_id} verified with email {user_email}")
             return True
         return False
 
@@ -50,6 +54,7 @@ async def send_notification(
         raise HTTPException(status_code=400, detail="Invalid user ID")
 
     notification_data = {
+        "user_email": user_email,
         "user_id": notification.user_id,
         "type": notification.type,
         "content": notification.content,
