@@ -11,7 +11,7 @@ from . import schemas
 from .database import get_redis, get_cassandra
 from .auth import get_current_user, oauth2_scheme
 from .notification import send_booking_notification
-from .event_client import get_event_details
+from .event_client import get_event_details, update_event_capacity_in_catalog
 from .consul_client import ConsulClient
 
 app = FastAPI(title="Booking Service")
@@ -57,33 +57,28 @@ async def create_booking(
     redis_client: redis.Redis = Depends(get_redis),
     cassandra_session = Depends(get_cassandra)
 ):
-    logger.info(f"Creating booking for event_id={booking.event_id}")
+    logger.info(f"Attempting to create booking for event_id={booking.event_id} by user_id={current_user['id']}")
 
-    # 1) Fetch event to read its capacity
     event = await get_event_details(booking.event_id)
     if not event:
+        logger.warning(f"Event not found: {booking.event_id}")
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # 2) Compute or retrieve current booking count from Redis
-    key = f"booking_count:{booking.event_id}"
-    raw = redis_client.get(key)
-    if raw is None:
-        row = cassandra_session.execute(
-            "SELECT COUNT(*) AS cnt FROM bookings WHERE event_id = %s AND status = %s ALLOW FILTERING",
-            (booking.event_id, schemas.BookingStatus.CONFIRMED.value)
-        ).one()
-        current = row.cnt if row and hasattr(row, "cnt") else 0
-        redis_client.set(key, current)
-    else:
-        current = int(raw)
+    event_capacity = event.get("capacity")
+    if event_capacity is None:
+        logger.error(f"Event capacity not available for event_id={booking.event_id}")
+        raise HTTPException(status_code=500, detail="Event capacity information is missing")
 
-    # 3) Check against event capacity
-    if current >= event["capacity"]:
+    key = f"booking_count:{booking.event_id}"
+    current_booking_count = redis_client.incr(key)
+
+    if current_booking_count > event_capacity:
+        redis_client.decr(key)  # Rollback Redis increment
+        logger.warning(f"Event is full: {booking.event_id}. Current bookings: {current_booking_count-1}, Capacity: {event_capacity}")
         raise HTTPException(status_code=400, detail="Event is full")
 
-    # 4) Insert new booking
     booking_id = str(uuid.uuid4())
-    new = {
+    new_booking_data = {
         "id": booking_id,
         "event_id": booking.event_id,
         "user_id": current_user["id"],
@@ -91,33 +86,46 @@ async def create_booking(
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
-    cassandra_session.execute(
-        """
-        INSERT INTO bookings (id, event_id, user_id, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        """,
-        (
-            new["id"],
-            new["event_id"],
-            new["user_id"],
-            new["status"].value,
-            new["created_at"],
-            new["updated_at"]
+
+    try:
+        cassandra_session.execute(
+            """
+            INSERT INTO bookings (id, event_id, user_id, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                new_booking_data["id"],
+                new_booking_data["event_id"],
+                new_booking_data["user_id"],
+                new_booking_data["status"].value,
+                new_booking_data["created_at"],
+                new_booking_data["updated_at"]
+            )
         )
-    )
+        logger.info(f"Booking {booking_id} created successfully for event_id={booking.event_id}")
+    except Exception as e:
+        redis_client.decr(key)  # Rollback Redis increment if Cassandra insert fails
+        logger.error(f"Failed to insert booking into Cassandra for event_id={booking.event_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create booking")
 
-    # 5) Increment our local counter
-    redis_client.incr(key)
+    update_success = await update_event_capacity_in_catalog(booking.event_id, increment=True)
+    if not update_success:
+        redis_client.decr(key)
+        cassandra_session.execute(
+            "DELETE FROM bookings WHERE id = %s",
+            (booking_id,)
+        )
+        logger.error(f"Failed to update event capacity in event-catalog-service for event_id={booking.event_id}. Booking rolled back.")
+        raise HTTPException(status_code=500, detail="Failed to update event capacity. Booking rolled back.")
 
-    # 6) Send confirmation notification
     background_tasks.add_task(
         send_booking_notification,
-        new["user_id"],
-        new["event_id"],
+        new_booking_data["user_id"],
+        new_booking_data["event_id"],
         "booking_confirmed"
     )
 
-    return new
+    return new_booking_data
 
 @app.get("/bookings/user/{user_id}", response_model=List[schemas.BookingResponse])
 async def get_user_bookings(
@@ -129,22 +137,30 @@ async def get_user_bookings(
         raise HTTPException(status_code=403, detail="Not authorized to view these bookings")
 
     rows = cassandra_session.execute(
-        "SELECT * FROM bookings WHERE user_id = %s",
+        "SELECT id, event_id, user_id, status, created_at, updated_at FROM bookings WHERE user_id = %s",
         (user_id,)
     )
 
     result = []
     for row in rows:
-        booking = {
-            "id": row.id,
-            "event_id": row.event_id,
-            "user_id": row.user_id,
-            "status": row.status,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at
-        }
-        booking["event_details"] = await get_event_details(row.event_id)
-        result.append(booking)
+        event_details = None
+        try:
+            event_details = await get_event_details(str(row.event_id))
+            if event_details is None:
+                logger.warning(f"Could not retrieve details for event_id: {row.event_id} while fetching bookings for user_id: {user_id}")
+        except Exception as e:
+            logger.error(f"Error fetching event details for event_id {row.event_id}: {e}")
+
+        booking_response = schemas.BookingResponse(
+            id=str(row.id),
+            event_id=str(row.event_id),
+            user_id=str(row.user_id),
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            event_details=event_details
+        )
+        result.append(booking_response)
 
     return result
 
@@ -154,29 +170,29 @@ async def get_event_bookings(
     current_user: dict = Depends(get_current_user),
     cassandra_session = Depends(get_cassandra)
 ):
-    event = await get_event_details(event_id)
+    event = await get_event_details(str(event_id))
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    if event["organizer_id"] != current_user["id"]:
+    if event.get("organizer_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to view these bookings")
 
     rows = cassandra_session.execute(
-        "SELECT * FROM bookings WHERE event_id = %s",
+        "SELECT id, event_id, user_id, status, created_at, updated_at FROM bookings WHERE event_id = %s",
         (event_id,)
     )
 
     result = []
     for row in rows:
-        booking = {
-            "id": row.id,
-            "event_id": row.event_id,
-            "user_id": row.user_id,
-            "status": row.status,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-            "event_details": event
-        }
-        result.append(booking)
+        booking_response = schemas.BookingResponse(
+            id=str(row.id),
+            event_id=str(row.event_id),
+            user_id=str(row.user_id),
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            event_details=event
+        )
+        result.append(booking_response)
 
     return result
 
@@ -188,7 +204,6 @@ async def cancel_booking(
     redis_client: redis.Redis   = Depends(get_redis),
     cassandra_session           = Depends(get_cassandra),
 ):
-    # 1) Fetch existing booking
     row = cassandra_session.execute(
         "SELECT event_id, user_id FROM bookings WHERE id = %s",
         (booking_id,)
@@ -196,21 +211,27 @@ async def cancel_booking(
     if not row:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    # 2) Authorization
     if row.user_id != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to delete this booking")
 
-    # 3) Delete from Cassandra
     cassandra_session.execute(
         "DELETE FROM bookings WHERE id = %s",
         (booking_id,)
     )
 
-    # 4) Decrement our Redis counter
     key = f"booking_count:{row.event_id}"
     redis_client.decr(key)
 
-    # 5) (Optional) Notify user
+    update_success = await update_event_capacity_in_catalog(row.event_id, increment=False)
+    if not update_success:
+        redis_client.incr(key)
+        cassandra_session.execute(
+            "INSERT INTO bookings (id, event_id, user_id, status, created_at, updated_at) VALUES (%s, %s, %s, %s, toTimestamp(now()), toTimestamp(now()))",
+            (booking_id, row.event_id, row.user_id, 'confirmed')
+        )
+        logger.error(f"Failed to update event capacity in event-catalog-service for event_id={row.event_id}. Booking cancellation rolled back.")
+        raise HTTPException(status_code=500, detail="Failed to update event capacity. Booking cancellation rolled back.")
+
     background_tasks.add_task(
         send_booking_notification,
         row.user_id,

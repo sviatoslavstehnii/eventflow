@@ -3,21 +3,18 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from . import crud, schemas, auth
-from .database import get_database
-from typing import List, Optional
+from .database import get_database, db as default_db
+from typing import List, Optional, Annotated
 import logging
 from .consul_client import ConsulClient
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Event Catalog Service")
 
-# Initialize Consul client
 consul_client = ConsulClient()
 
-# Register service with Consul on startup
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -26,7 +23,6 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to register service with Consul: {str(e)}")
 
-# Deregister service from Consul on shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
     try:
@@ -35,7 +31,6 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Failed to deregister service from Consul: {str(e)}")
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -75,6 +70,30 @@ async def create_event(
 ):
     return await crud.create_event(db=db, event=event, organizer_id=current_user["id"])
 
+@app.get("/events/search", response_model=List[schemas.Event])
+async def search_events(
+    query: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    events = await crud.search_events(db, query)
+    return events
+
+@app.put("/events/{event_id}/capacity", response_model=schemas.Event)
+async def update_event_capacity(
+    event_id: str,
+    capacity_update: schemas.EventCapacityUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    event = await crud.get_event(db, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    updated_event = await crud.update_event_capacity(db, event_id, increment=capacity_update.increment)
+    if updated_event is None:
+        raise HTTPException(status_code=400, detail="Could not update event capacity or event not found")
+    return updated_event
+
+
 @app.put("/events/{event_id}", response_model=schemas.Event)
 async def update_event(
     event_id: str,
@@ -87,7 +106,10 @@ async def update_event(
         raise HTTPException(status_code=404, detail="Event not found")
     if db_event["organizer_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to update this event")
-    return await crud.update_event(db=db, event_id=event_id, event=event)
+    updated_event = await crud.update_event(db=db, event_id=event_id, event=event)
+    if updated_event is None:
+        raise HTTPException(status_code=404, detail="Event not found or update failed")
+    return updated_event
 
 @app.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_event(

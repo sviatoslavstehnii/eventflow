@@ -17,17 +17,14 @@ from .consul_client import ConsulClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create database tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Authentication Service")
 
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
 
-# Initialize Consul client
 consul_client = ConsulClient()
 
-# Register service with Consul on startup
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -36,7 +33,6 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to register service with Consul: {str(e)}")
 
-# Deregister service from Consul on shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
     try:
@@ -45,14 +41,24 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Failed to deregister service from Consul: {str(e)}")
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.put("/users/me", response_model=schemas.User)
+def update_current_user(
+    user_update: schemas.UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    updated_user = crud.update_user(db=db, user_id=current_user.id, user_update=user_update)
+    if updated_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return updated_user
 
 @app.get("/health")
 async def health_check():

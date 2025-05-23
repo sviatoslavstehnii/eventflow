@@ -1,179 +1,242 @@
-version: '3.8'
-
 services:
   consul:
-    image: consul:1.15
+    image: hashicorp/consul:1.15
+    container_name: consul
     ports:
       - "8500:8500"
+      - "8600:8600/tcp"
       - "8600:8600/udp"
-    command: 'agent -dev -client=0.0.0.0'
+    volumes:
+      - ./consul-config.json:/consul/config/consul-config.json:ro
+    command: "agent -server -bootstrap-expect=1 -ui -client=0.0.0.0 -data-dir=/consul/data -config-file=/consul/config/consul-config.json"
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0
+
+  postgres_auth:
+    image: postgres:13
+    container_name: postgres_auth
+    environment:
+      POSTGRES_USER: authuser
+      POSTGRES_PASSWORD: authpassword
+      POSTGRES_DB: authdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "consul", "members"]
+      test: ["CMD-SHELL", "pg_isready -U authuser -d authdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo_event:
+    image: mongo:5.0
+    container_name: mongo_event
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_event_data:/data/db
+   
+   
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cassandra_booking:
+    image: cassandra:4.0
+    container_name: cassandra_booking
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_booking_data:/var/lib/cassandra
+    environment:
+      CASSANDRA_CLUSTER_NAME: EventFlowCluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  redis_booking:
+    image: redis:6.2-alpine
+    container_name: redis_booking
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_booking_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
+      timeout: 2s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.9-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" 
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  mongo_notification:
+    image: mongo:5.0
+    container_name: mongo_notification
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_notification_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet
+      interval: 10s
       timeout: 5s
       retries: 5
 
   auth-service:
-    build: 
-      context: ./auth-service
-      dockerfile: Dockerfile
+    build: ./auth-service
+    container_name: auth-service
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://authuser:authpassword@postgres_auth/authdb
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      JWT_SECRET: your-secret-key
+      JWT_ALGORITHM: HS256
+      SERVICE_NAME: auth-service
+      SERVICE_PORT: 8000
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+      consul:
+        condition: service_started
+    volumes:
+      - ./auth-service/app:/app/app
+
+  event-catalog-service:
+    build: ./event-catalog-service
+    container_name: event-catalog-service
     ports:
       - "8001:8001"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@auth-db:5432/auth_db
-      - JWT_SECRET=your-secret-key
-      - JWT_ALGORITHM=HS256
-      - CONSUL_HOST=consul
-      - CONSUL_PORT=8500
-      - SERVICE_NAME=auth-service
-      - SERVICE_PORT=8001
-      - INTERNAL_API_KEY=super-secure-api-key
+      MONGO_DETAILS: mongodb://mongo_event:27017/eventcatalogdb
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      JWT_SECRET: your-secret-key
+      JWT_ALGORITHM: HS256
+      SERVICE_NAME: event-catalog-service
+      SERVICE_PORT: 8001
     depends_on:
-      auth-db:
+      mongo_event:
         condition: service_healthy
       consul:
-        condition: service_healthy
-
-  event-catalog-service:
-    build:
-      context: ./event-catalog-service
-      dockerfile: Dockerfile
-    ports:
-      - "8002:8002"
-    environment:
-      - MONGODB_URL=mongodb://event-catalog-db:27017
-      - JWT_SECRET=your-secret-key
-      - JWT_ALGORITHM=HS256
-      - AUTH_SERVICE_URL=http://localhost:8001
-      - BOOKING_SERVICE_URL=http://localhost:8003
-      - CONSUL_HOST=consul
-      - CONSUL_PORT=8500
-      - SERVICE_NAME=event-catalog-service
-      - SERVICE_PORT=8002
-    depends_on:
-      event-catalog-db:
-        condition: service_healthy
-      consul:
-        condition: service_healthy
+        condition: service_started
+    volumes:
+      - ./event-catalog-service/app:/app/app
 
   booking-service:
-    build:
-      context: ./booking-service
-      dockerfile: Dockerfile
+    build: ./booking-service
+    container_name: booking-service
+    ports:
+      - "8002:8002"
+   
+   
+   
+   
+    environment:
+      CASSANDRA_HOSTS: cassandra_booking
+      CASSANDRA_KEYSPACE: bookingkeyspace
+      REDIS_HOST: redis_booking
+      REDIS_PORT: 6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      EVENT_CATALOG_SERVICE_URL: http://event-catalog-service:8001
+      AUTH_SERVICE_URL: http://auth-service:8000
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      JWT_SECRET: your-secret-key
+      JWT_ALGORITHM: HS256
+      SERVICE_NAME: booking-service
+      SERVICE_PORT: 8002
+    depends_on:
+      cassandra_booking:
+        condition: service_healthy
+      redis_booking:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      consul:
+        condition: service_started
+     
+     
+     
+     
+    volumes:
+      - ./booking-service/app:/app/app
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
     ports:
       - "8003:8003"
     environment:
-      - CASSANDRA_HOSTS=booking-db
-      - REDIS_URL=redis://booking-redis:6379/0
-      - AUTH_SERVICE_URL=http://localhost:8001
-      - EVENT_SERVICE_URL=http://localhost:8002
-      - NOTIFICATION_SERVICE_URL=http://localhost:8004
-      - CONSUL_HOST=consul
-      - CONSUL_PORT=8500
-      - SERVICE_NAME=booking-service
-      - SERVICE_PORT=8003
+      MONGO_DETAILS: mongodb://mongo_notification:27017/notificationdb
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      SERVICE_NAME: notification-service
+      SERVICE_PORT: 8003
+     
+      SMTP_USER: eventflow.ucu@gmail.com
+      SMTP_PASS: qipj smqk jehm ziqa
     depends_on:
-      booking-db:
+      mongo_notification:
         condition: service_healthy
-      booking-redis:
+      rabbitmq:
         condition: service_healthy
       consul:
-        condition: service_healthy
-
-  # Databases
-  auth-db:
-    image: postgres:15
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=auth_db
+        condition: service_started
     volumes:
-      - auth-db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - ./notification-service/app:/app/app
 
-  event-catalog-db:
-    image: mongo:6
-    volumes:
-      - event-catalog-db-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  booking-db:
-    image: cassandra:4
-    volumes:
-      - booking-db-data:/var/lib/cassandra
-    healthcheck:
-      test: ["CMD-SHELL", "cqlsh -e \"describe keyspaces\""]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-
-  # Additional Services
-  booking-redis:
-    image: redis:7
-    volumes:
-      - booking-redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  rabbitmq:
-    image: rabbitmq:3-management
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "8080:8080"
     environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  notification-db:
-    image: mongo:6
-    volumes:
-      - notification-db-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  notification-service:
-    build:
-      context: ./notification-service
-      dockerfile: Dockerfile
-    ports:
-      - "8004:8004"
-    environment:
-      - MONGODB_URL=mongodb://notification-db:27017
-      - DATABASE_NAME=notification_db
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
-      - CONSUL_HOST=consul
-      - CONSUL_PORT=8500
-      - SMTP_USER=eventflow.ucu@gmail.com
-      - SMTP_PASS=qipj smqk jehm ziqa
-      - INTERNAL_API_KEY=super-secure-api-key
+      AUTH_URL: http://auth-service:8000
+      EVENT_URL: http://event-catalog-service:8001
+      BOOK_URL: http://booking-service:8002
+      NOTIF_URL: http://notification-service:8003
     depends_on:
-      - notification-db
-      - rabbitmq
+      - auth-service
+      - event-catalog-service
+      - booking-service
+      - notification-service
 
 volumes:
-  auth-db-data:
-  event-catalog-db-data:
-  booking-db-data:
-  notification-db-data:
-  booking-redis-data:
-  rabbitmq-data:
+  postgres_auth_data:
+  mongo_event_data:
+  cassandra_booking_data:
+  redis_booking_data:
+  rabbitmq_data:
+  mongo_notification_data:

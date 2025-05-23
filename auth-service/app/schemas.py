@@ -10,6 +10,12 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
 
+class UserUpdate(UserBase):
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    password: Optional[str] = None
+
 class User(UserBase):
     id: str
     is_active: bool
@@ -24,4 +30,4 @@ class Token(BaseModel):
     token_type: str
 
 class TokenData(BaseModel):
-    email: Optional[str] = None 
+    email: Optional[str] = None

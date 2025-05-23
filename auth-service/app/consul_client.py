@@ -14,7 +14,7 @@ class ConsulClient:
         self.consul_host = os.getenv("CONSUL_HOST", "consul")
         self.consul_port = int(os.getenv("CONSUL_PORT", "8500"))
         self.service_name = os.getenv("SERVICE_NAME", "auth-service")
-        self.service_port = int(os.getenv("SERVICE_PORT", "8001"))
+        self.service_port = int(os.getenv("SERVICE_PORT", "8000"))
         self.consul = consul.Consul(host=self.consul_host, port=self.consul_port)
 
     def register_service(self):
@@ -59,4 +59,4 @@ class ConsulClient:
             logger.info(f"Successfully deregistered {self.service_name} from Consul")
         except Exception as e:
             logger.error(f"Failed to deregister service from Consul: {str(e)}")
-            raise 
+            raise

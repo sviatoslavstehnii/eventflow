@@ -45,19 +45,21 @@ def authenticate_user(db: Session, username: str, password: str):
         return False
     return user
 
-def update_user(db: Session, user_id: str, user_update: schemas.UserCreate):
+def update_user(db: Session, user_id: str, user_update: schemas.UserUpdate):
     db_user = get_user(db, user_id)
     if not db_user:
         return None
     
     update_data = user_update.dict(exclude_unset=True)
-    if "password" in update_data:
+    if "password" in update_data and update_data["password"]:
         update_data["hashed_password"] = pwd_context.hash(update_data.pop("password"))
-    
+    elif "password" in update_data:
+        del update_data["password"]
+            
     for key, value in update_data.items():
         setattr(db_user, key, value)
     
     db_user.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(db_user)
-    return db_user 
+    return db_user

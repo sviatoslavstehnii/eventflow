@@ -1,24 +1,8 @@
 from datetime import datetime
 from typing import Optional, Any
 from pydantic import BaseModel, Field
-from bson import ObjectId
 
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
 
-    @classmethod
-    def validate(cls, v: Any, handler: Any) -> ObjectId:
-        if isinstance(v, ObjectId):
-            return v
-        if not ObjectId.is_valid(str(v)):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(str(v))
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
-        return {"type": "string"}
 
 class EventBase(BaseModel):
     title: str
@@ -59,15 +43,15 @@ class EventUpdate(BaseModel):
 class EventCapacityUpdate(BaseModel):
     increment: bool = True
 
-class Event(EventBase):
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+class Event(BaseModel):
+    id: str = Field(default_factory=str, alias="_id")
     organizer_id: str
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+
     model_config = {
         "populate_by_name": True,
         "arbitrary_types_allowed": True,
-        "json_encoders": {ObjectId: str}
-    } 
+    }

@@ -4,11 +4,12 @@
 # Stop on any error
 $ErrorActionPreference = 'Stop'
 
-# Base URLs
-$AUTH_URL =  'http://localhost:8001'
-$EVENT_URL = 'http://localhost:8002'
-$BOOK_URL =  'http://localhost:8003'
-$NOTIF_URL = 'http://localhost:8004'
+# Base URL for API Gateway
+$BASE_URL = 'http://localhost:8080'
+$AUTH_URL =  "$BASE_URL"
+$EVENT_URL = "$BASE_URL"
+$BOOK_URL =  "$BASE_URL"
+$NOTIF_URL = "$BASE_URL"
 
 Write-Host "`n1) Register a new user"
 $regBody = @{
@@ -70,12 +71,13 @@ $authHeader = @{ Authorization = "Bearer $token" }
 # --- Event tests ---
 Write-Host "`n7) Create a test event"
 $evBody = @{
-    name        = 'Test Event'
+    title       = 'Test Event'
     description = 'A simple test'
-    date        = '2025-06-01T10:00:00Z'
+    start_time  = '2025-06-01T10:00:00Z'
+    end_time    = '2025-06-01T12:00:00Z'
     location    = 'Online'
-    category    = 'Testing'
     capacity    = 5
+    price       = 0
 } | ConvertTo-Json
 $evResp = Invoke-RestMethod -Method Post -Uri "$EVENT_URL/events" `
     -Headers $authHeader -ContentType 'application/json' -Body $evBody
@@ -100,10 +102,77 @@ Write-Host "Deleted"
 
 Write-Host "`n12) Re-create event for booking"
 $evBody2 = @{
-    name        = 'Booking Event'
+    title       = 'Booking Event'
     description = 'Event for booking tests'
-    date        = '2025-06-02T10:00:00Z'
+    start_time  = '2025-06-02T10:00:00Z'
+    end_time    = '2025-06-02T12:00:00Z'
     location    = 'Online'
-    category    = 'Booking'
     capacity    = 2
+    price       = 0
+} | ConvertTo-Json
+$evResp2 = Invoke-RestMethod -Method Post -Uri "$EVENT_URL/events" `
+    -Headers $authHeader -ContentType 'application/json' -Body $evBody2
+Write-Host ($evResp2 | ConvertTo-Json -Depth 5)
+$eventId2 = $evResp2.id
+
+Write-Host "`n13) Book a spot on the event"
+$bookBody = @{
+    event_id = $eventId2
+} | ConvertTo-Json
+$bookResp = Invoke-RestMethod -Method Post -Uri "$BOOK_URL/bookings" `
+    -Headers $authHeader -ContentType 'application/json' -Body $bookBody
+Write-Host ($bookResp | ConvertTo-Json -Depth 5)
+
+Write-Host "`n14) List all bookings for the user"
+Invoke-RestMethod -Uri "$BOOK_URL/bookings" -Headers $authHeader | ConvertTo-Json -Depth 5 | Write-Host
+
+Write-Host "`n15) Cancel the booking"
+Invoke-RestMethod -Method Delete -Uri "$BOOK_URL/bookings/$($bookResp.id)" -Headers $authHeader
+Write-Host "Booking cancelled"
+
+Write-Host "`n16) Re-instate the booking"
+$bookResp2 = Invoke-RestMethod -Method Post -Uri "$BOOK_URL/bookings" `
+    -Headers $authHeader -ContentType 'application/json' -Body $bookBody
+Write-Host ($bookResp2 | ConvertTo-Json -Depth 5)
+
+Write-Host "`n17) Create a notification"
+$notifBody = @{
+    username = 'alice'
+    event_id = $eventId2
+    type     = 'email'
+    data     = @{ subject = 'Event Reminder'; body = 'Don''t forget the event!' }
+} | ConvertTo-Json
+$notifResp = Invoke-RestMethod -Method Post -Uri "$NOTIF_URL/notifications" `
+    -Headers $authHeader -ContentType 'application/json' -Body $notifBody
+Write-Host ($notifResp | ConvertTo-Json -Depth 5)
+
+Write-Host "`n18) List all notifications for the user"
+Invoke-RestMethod -Uri "$NOTIF_URL/notifications" -Headers $authHeader | ConvertTo-Json -Depth 5 | Write-Host
+
+Write-Host "`n19) Delete the notification"
+Invoke-RestMethod -Method Delete -Uri "$NOTIF_URL/notifications/$($notifResp.id)" -Headers $authHeader
+Write-Host "Notification deleted"
+
+Write-Host "`n20) Attempt to access a protected resource without token"
+try {
+    Invoke-RestMethod -Method Get -Uri "$AUTH_URL/auth/validate"
+    Write-Host "Unexpected success"
+} catch {
+    $code = $_.Exception.Response.StatusCode.value__
+    Write-Host "Got HTTP $code as expected"
 }
+
+Write-Host "`n21) Cleanup - delete user"
+Invoke-RestMethod -Method Delete -Uri "$AUTH_URL/auth/alice" -Headers $authHeader
+Write-Host "User deleted"
+
+Write-Host "`n22) Verify user deletion"
+try {
+    Invoke-RestMethod -Method Get -Uri "$AUTH_URL/auth/validate" -Headers $authHeader
+    Write-Host "Unexpected success"
+} catch {
+    $code = $_.Exception.Response.StatusCode.value__
+    Write-Host "Got HTTP $code as expected"
+}
+
+Write-Host "`n23) Done"

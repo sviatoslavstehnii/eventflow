@@ -22,17 +22,25 @@ class PyObjectId(ObjectId):
         return {"type": "string"}
 
 class BookingModel(BaseModel):
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    event_id: PyObjectId
-    user_id: UUID
+    id: str = Field(default_factory=str, alias="_id")
+    event_id: str
+    user_id: str
     status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
 
+    @classmethod
+    def validate(cls, value):
+        # Convert ObjectId to str if needed
+        if isinstance(value, dict) and "_id" in value and not isinstance(value["_id"], str):
+            value["_id"] = str(value["_id"])
+        if isinstance(value, dict) and "event_id" in value and not isinstance(value["event_id"], str):
+            value["event_id"] = str(value["event_id"])
+        return value
+
     model_config = {
         "populate_by_name": True,
         "arbitrary_types_allowed": True,
-        "json_encoders": {ObjectId: str},
         "json_schema_extra": {
             "example": {
                 "event_id": "6820825288c75120f79deed4",
@@ -40,4 +48,4 @@ class BookingModel(BaseModel):
                 "status": "pending"
             }
         }
-    } 
+    }

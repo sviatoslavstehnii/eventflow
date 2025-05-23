@@ -17,29 +17,32 @@ logger = logging.getLogger("auth-dep")
 # JWT Configuration
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-AUTH_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8001")
+AUTH_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=AUTH_URL+"/auth/login")
 consul_client = ConsulClient()
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    auth_service = consul_client.get_service("auth-service")
+    auth_service_name = "auth-service"
+    auth_service = consul_client.get_service(auth_service_name)
     if not auth_service:
+        logger.error(f"{auth_service_name} not found in Consul.")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Auth service is not available"
+            detail=f"{auth_service_name} is not available"
         )
     
-    auth_url = f"http://{auth_service['host']}:{auth_service['port']}/auth/validate"
+    validate_url = f"http://{auth_service['host']}:{auth_service['port']}/users/me"
     
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                auth_url,
+                validate_url,
                 headers={"Authorization": f"Bearer {token}"}
             )
             if response.status_code == 200:
-                return response.json()["user"]
+                return response.json()
+            logger.warning(f"Auth service validation failed with status {response.status_code}: {response.text}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
