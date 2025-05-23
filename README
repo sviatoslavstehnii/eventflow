@@ -1,5 +1,7 @@
 # EventFlow: Scalable Event Management Platform
 
+![architecture](image.png)
+
 ## Overview
 EventFlow is a microservices-based platform designed for discovering, creating, managing, and registering for various events such as conferences, workshops, meetups, and concerts. It utilizes a suite of specialized microservices to handle different aspects of the event lifecycle, ensuring scalability, resilience, and maintainability.
 
