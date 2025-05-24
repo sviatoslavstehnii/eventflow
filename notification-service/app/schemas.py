@@ -14,9 +14,9 @@ class NotificationStatus(str, Enum):
     FAILED = "failed"
 
 class NotificationCreate(BaseModel):
-    user_id: str  # User ID of the recipient
-    type: NotificationType  # Enum for notification type
-    content: str  # Notification content (message text)
+    user_id: str  #
+    type: NotificationType
+    content: str
     
 class NotificationResponse(BaseModel):
     user_id: str

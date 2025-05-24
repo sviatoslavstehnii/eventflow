@@ -1,9 +1,16 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from . import models, schemas
 from datetime import datetime
+from bson import ObjectId
 
 async def get_event(db: AsyncIOMotorDatabase, event_id: str):
-    event = await db.events.find_one({"_id": event_id})
+    # Convert event_id to ObjectId if possible
+    query_id = event_id
+    try:
+        query_id = ObjectId(event_id)
+    except Exception:
+        pass
+    event = await db.events.find_one({"_id": query_id})
     if event and "_id" in event and not isinstance(event["_id"], str):
         event["_id"] = str(event["_id"])
     return event
@@ -62,8 +69,14 @@ async def search_events(db: AsyncIOMotorDatabase, query: str):
     return events
 
 async def update_event_capacity(db: AsyncIOMotorDatabase, event_id: str, increment: bool = True):
+    # Convert event_id to ObjectId if possible
+    query_id = event_id
+    try:
+        query_id = ObjectId(event_id)
+    except Exception:
+        pass
     result = await db.events.find_one_and_update(
-        {"_id": event_id},
+        {"_id": query_id},
         {"$inc": {"capacity": 1 if increment else -1}},
         return_document=True
     )

@@ -85,6 +85,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token(data={"sub": user.email})
+    logger.info(f"User {user.email} logged in successfully with token {access_token}")
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/auth/logout")
@@ -114,3 +115,8 @@ def get_user_by_id(
 @app.get("/auth/validate")
 def validate_token(current_user: models.User = Depends(get_current_user)):
     return {"valid": True, "user": current_user}
+
+@app.get("/users/check-username")
+def check_username(username: str, db: Session = Depends(get_db)):
+    user = crud.get_user_by_username(db, username=username)
+    return {"exists": user is not None}

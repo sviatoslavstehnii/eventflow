@@ -1,62 +1,56 @@
-import httpx
 import os
 from dotenv import load_dotenv
+import logging
+import pika
+import json
+from datetime import datetime
 
 load_dotenv()
 
-NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification-service:8003") 
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
+RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 
 async def send_booking_notification(
-    user_email: str, 
+    user_email: str,
     user_full_name: str,
     event_title: str,
-    booking_id: str, 
-    booking_status: str 
+    booking_id: str,
+    booking_status: str
 ):
     """
-    Send a structured notification to the notification service.
+    Send a structured notification directly to the message queue.
     """
-    notification_payload = {
-        "recipient_email": user_email,
-        "recipient_name": user_full_name or "Valued Customer",
-        "type": f"booking_{booking_status}", 
-        "data": {
-            "event_title": event_title,
-            "booking_id": str(booking_id),
-            "status": booking_status,
-            
-        }
+    message_for_mq = {
+        "user_id": user_email,
+        "user_email": user_email,
+        "type": f"booking_{booking_status}",
+        "content": f"Dear {user_full_name or 'Valued Customer'}, your booking for event '{event_title}' (Booking ID: {booking_id}) has been {booking_status}.",
+        "status": "PENDING",
+        "created_at": datetime.utcnow().isoformat()
     }
 
-    target_url = f"{NOTIFICATION_SERVICE_URL}/notifications/" 
-
     try:
-        async with httpx.AsyncClient() as client:
-            message_content = f"Your booking for '{event_title}' (ID: {str(booking_id)}) has been {booking_status}."
-            if booking_status == "confirmed":
-                subject = f"Booking Confirmed: {event_title}"
-            elif booking_status == "cancelled":
-                subject = f"Booking Cancelled: {event_title}"
-            else:
-                subject = "Booking Update"
+        mq_url = f"amqp://{RABBITMQ_USER}:{RABBITMQ_PASS}@{RABBITMQ_HOST}:{RABBITMQ_PORT}/"
+        logging.info(f"Attempting to send notification for booking {booking_id} to RabbitMQ at {mq_url}")
+        params = pika.URLParameters(mq_url)
+        connection = pika.BlockingConnection(params)
+        channel = connection.channel()
+      
+        channel.queue_declare(queue="notifications", durable=True)
 
-
-            notification_service_payload = {
-                "user_id": user_email, 
-                "type": f"booking_{booking_status}",
-                "message_content": message_content,
-
-            }
-            response = await client.post(
-                f"{NOTIFICATION_SERVICE_URL}/notifications/send", 
-                json=notification_service_payload
+        channel.basic_publish(
+            exchange="",
+            routing_key="notifications",
+            body=json.dumps(message_for_mq),
+            properties=pika.BasicProperties(
+                delivery_mode=2,
             )
-            if response.status_code == 200 or response.status_code == 202: 
-                logging.info(f"Successfully sent {booking_status} notification for booking {booking_id} to {user_email}")
-                return True
-            else:
-                logging.error(f"Failed to send notification for booking {booking_id}. Status: {response.status_code}, Response: {response.text}")
-                return False
-    except httpx.RequestError as e:
-        logging.error(f"Notification service request error for booking {booking_id}: {e}")
+        )
+        connection.close()
+        logging.info(f"Successfully sent booking_{booking_status} notification for booking {booking_id} (User: {user_email}) to message queue.")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send notification for booking {booking_id} to message queue: {e}")
         return False

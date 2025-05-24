@@ -45,6 +45,13 @@ class EventCapacityUpdate(BaseModel):
 
 class Event(BaseModel):
     id: str = Field(default_factory=str, alias="_id")
+    title: str
+    description: str
+    location: str
+    start_time: datetime
+    end_time: datetime
+    capacity: int
+    price: float
     organizer_id: str
     is_active: bool
     created_at: datetime

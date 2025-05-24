@@ -10,6 +10,4 @@ python-multipart==0.0.9
 pika>=1.3.2,<1.4.0 # For RabbitMQ if used directly, though notification.py uses HTTP
 python-consul2==0.1.5 # Switched to python-consul2
 uuid==1.30 # For UUID generation, though built-in uuid is usually sufficient
-
-# Ensure python-consul is removed if python-consul2 is used.
-# pip uninstall python-consul
+httpx[http2]>=0.27.0,<0.28.0 # For HTTP/2 support

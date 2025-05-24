@@ -75,35 +75,9 @@ services:
       timeout: 2s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:3.9-management-alpine
-    container_name: rabbitmq
-    ports:
-      - "5672:5672" 
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq/
-    healthcheck:
-      test: rabbitmq-diagnostics -q ping
-      interval: 30s
-      timeout: 30s
-      retries: 3
 
-  mongo_notification:
-    image: mongo:5.0
-    container_name: mongo_notification
-    ports:
-      - "27018:27017"
-    volumes:
-      - mongo_notification_data:/data/db
-    healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet
-      interval: 10s
-      timeout: 5s
-      retries: 5
+
+
 
   auth-service:
     build: ./auth-service
@@ -151,11 +125,7 @@ services:
     build: ./booking-service
     container_name: booking-service
     ports:
-      - "8002:8002"
-   
-   
-   
-   
+      - "8002:8002"   
     environment:
       CASSANDRA_HOSTS: cassandra_booking
       CASSANDRA_KEYSPACE: bookingkeyspace
@@ -182,40 +152,55 @@ services:
         condition: service_healthy
       consul:
         condition: service_started
-     
-     
-     
-     
     volumes:
       - ./booking-service/app:/app/app
 
+
+  notification-db:
+    container_name: notification-db
+    image: mongo:6
+    volumes:
+      - notification-db-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    container_name: rabbitmq
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   notification-service:
-    build: ./notification-service
     container_name: notification-service
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
     ports:
       - "8003:8003"
     environment:
-      MONGO_DETAILS: mongodb://mongo_notification:27017/notificationdb
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: guest
-      RABBITMQ_PASS: guest
-      CONSUL_HOST: consul
-      CONSUL_PORT: 8500
-      SERVICE_NAME: notification-service
-      SERVICE_PORT: 8003
-     
-      SMTP_USER: eventflow.ucu@gmail.com
-      SMTP_PASS: qipj smqk jehm ziqa
+      - MONGODB_URL=mongodb://notification-db:27017
+      - DATABASE_NAME=notification_db
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - SMTP_USER=eventflow.ucu@gmail.com
+      - SMTP_PASS=qipj smqk jehm ziqa
+      - INTERNAL_API_KEY=super-secure-api-key
     depends_on:
-      mongo_notification:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      consul:
-        condition: service_started
-    volumes:
-      - ./notification-service/app:/app/app
+      - notification-db
+      - rabbitmq
 
   api-gateway:
     build: ./api-gateway
@@ -239,4 +224,4 @@ volumes:
   cassandra_booking_data:
   redis_booking_data:
   rabbitmq_data:
-  mongo_notification_data:
+  notification-db-data:

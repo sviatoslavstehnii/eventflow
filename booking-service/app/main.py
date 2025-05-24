@@ -1,11 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import redis
 import uuid
 import logging
+import os
+import httpx
 
 from . import schemas
 from .database import get_redis, get_cassandra
@@ -77,6 +79,16 @@ async def create_booking(
         logger.warning(f"Event is full: {booking.event_id}. Current bookings: {current_booking_count-1}, Capacity: {event_capacity}")
         raise HTTPException(status_code=400, detail="Event is full")
 
+    # Prevent double-booking: check if user already has a booking for this event
+    existing_booking = cassandra_session.execute(
+        "SELECT id FROM bookings WHERE user_id = %s AND event_id = %s ALLOW FILTERING",
+        (current_user["id"], booking.event_id)
+    ).one()
+    if existing_booking:
+        redis_client.decr(key)  # Rollback Redis increment
+        logger.warning(f"User {current_user['id']} already booked event {booking.event_id}")
+        raise HTTPException(status_code=400, detail="You have already booked this event.")
+
     booking_id = str(uuid.uuid4())
     new_booking_data = {
         "id": booking_id,
@@ -118,11 +130,26 @@ async def create_booking(
         logger.error(f"Failed to update event capacity in event-catalog-service for event_id={booking.event_id}. Booking rolled back.")
         raise HTTPException(status_code=500, detail="Failed to update event capacity. Booking rolled back.")
 
+    # Fetch user info for notification
+    AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
+    INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
+    user_info = None
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{AUTH_SERVICE_URL}/users/{new_booking_data['user_id']}", headers={"X-Internal-API-Key": INTERNAL_API_KEY})
+        if resp.status_code == 200:
+            user_info = resp.json()
+    event_info = event
+    user_email = user_info["email"] if user_info else new_booking_data["user_id"]
+    user_full_name = user_info.get("full_name") if user_info else ""
+    event_title = event_info.get("title") if event_info else ""
+
     background_tasks.add_task(
         send_booking_notification,
-        new_booking_data["user_id"],
-        new_booking_data["event_id"],
-        "booking_confirmed"
+        user_email,
+        user_full_name,
+        event_title,
+        new_booking_data["id"],
+        "confirmed"
     )
 
     return new_booking_data
@@ -222,7 +249,7 @@ async def cancel_booking(
     key = f"booking_count:{row.event_id}"
     redis_client.decr(key)
 
-    update_success = await update_event_capacity_in_catalog(row.event_id, increment=False)
+    update_success = await update_event_capacity_in_catalog(row.event_id, increment=True)
     if not update_success:
         redis_client.incr(key)
         cassandra_session.execute(
@@ -232,11 +259,73 @@ async def cancel_booking(
         logger.error(f"Failed to update event capacity in event-catalog-service for event_id={row.event_id}. Booking cancellation rolled back.")
         raise HTTPException(status_code=500, detail="Failed to update event capacity. Booking cancellation rolled back.")
 
+    AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
+    INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
+    user_info = None
+    event_info = None
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(f"{AUTH_SERVICE_URL}/users/{row.user_id}", headers={"X-Internal-API-Key": INTERNAL_API_KEY})
+        if user_resp.status_code == 200:
+            user_info = user_resp.json()
+    event_info = await get_event_details(str(row.event_id))
+    user_email = user_info["email"] if user_info else row.user_id
+    user_full_name = user_info.get("full_name") if user_info else ""
+    event_title = event_info.get("title") if event_info else ""
+
     background_tasks.add_task(
         send_booking_notification,
-        row.user_id,
-        row.event_id,
-        "booking_cancelled"
+        user_email,
+        user_full_name,
+        event_title,
+        booking_id,
+        "cancelled"
     )
 
     return {"message": "Booking deleted successfully"}
+
+@app.get("/bookings/user/{user_id}/event/{event_id}", response_model=Optional[schemas.BookingResponse])
+async def check_user_booking_for_event(
+    user_id: str,
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+    cassandra_session = Depends(get_cassandra)
+):
+    if user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to view this booking")
+    row = cassandra_session.execute(
+        "SELECT id, event_id, user_id, status, created_at, updated_at FROM bookings WHERE user_id = %s AND event_id = %s ALLOW FILTERING",
+        (user_id, event_id)
+    ).one()
+    if not row:
+        return None
+    event_details = await get_event_details(str(row.event_id))
+    return schemas.BookingResponse(
+        id=str(row.id),
+        event_id=str(row.event_id),
+        user_id=str(row.user_id),
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        event_details=event_details
+    )
+
+@app.delete("/bookings/user/{user_id}/event/{event_id}")
+async def delete_user_booking_for_event(
+    user_id: str,
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+    redis_client: redis.Redis = Depends(get_redis),
+    cassandra_session = Depends(get_cassandra),
+    background_tasks: BackgroundTasks = None
+):
+    if user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this booking")
+    row = cassandra_session.execute(
+        "SELECT id FROM bookings WHERE user_id = %s AND event_id = %s ALLOW FILTERING",
+        (user_id, event_id)
+    ).one()
+    if not row:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    booking_id = str(row.id)
+    # Reuse existing cancel logic
+    return await cancel_booking(booking_id, background_tasks, current_user, redis_client, cassandra_session)

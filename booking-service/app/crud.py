@@ -3,13 +3,15 @@ from .models import BookingModelCassandra # Assuming you rename/create this
 from .schemas import Booking as BookingSchema, BookingStatus
 from datetime import datetime
 import logging
+import os
+import httpx
 
 logger = logging.getLogger(__name__)
+NOTIFICATION_SERVICE_URL = "http://notification-service:8003"
 
 async def create_booking(session, booking_data: BookingSchema):
     logger.debug(f"Attempting to create booking in Cassandra: {booking_data}")
     try:
-
         insert_statement = session.prepare(
             f"INSERT INTO {session.keyspace}.bookings (id, event_id, user_id, status, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)"
@@ -26,6 +28,14 @@ async def create_booking(session, booking_data: BookingSchema):
             ),
         )
         logger.info(f"Successfully created booking {booking_data.id} in Cassandra.")
+        # Send notification to notification service
+        await send_notification_to_service(
+            user_id=booking_data.user_id,
+            event_id=booking_data.event_id,
+            booking_id=booking_data.id,
+            status=booking_data.status.value,
+            action="created"
+        )
         return booking_data # Or fetch from DB to confirm
     except Exception as e:
         logger.error(f"Error creating booking in Cassandra: {e}")
@@ -91,12 +101,32 @@ async def update_booking_status(session, booking_id: str, status: BookingStatus)
         )
         updated_at_time = datetime.utcnow()
         session.execute(update_statement, (status.value, updated_at_time, booking_id))
-        
         # Return the updated booking data
         current_booking.status = status
         current_booking.updated_at = updated_at_time
         logger.info(f"Successfully updated booking {booking_id} to status {status.value}")
+        # Send notification to notification service
+        await send_notification_to_service(
+            user_id=current_booking.user_id,
+            event_id=current_booking.event_id,
+            booking_id=current_booking.id,
+            status=status.value,
+            action="updated"
+        )
         return current_booking
     except Exception as e:
         logger.error(f"Error updating booking status for {booking_id}: {e}")
         raise
+
+# Helper function to send notification
+async def send_notification_to_service(user_id, event_id, booking_id, status, action):
+    payload = {
+        "user_id": user_id,
+        "type": f"booking_{action}",
+        "content": f"Booking {booking_id} for event {event_id} has been {action} with status {status}."
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(f"{NOTIFICATION_SERVICE_URL}/notifications/send", json=payload)
+    except Exception as e:
+        logger.error(f"Failed to send notification to notification service: {e}")

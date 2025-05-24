@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import datetime
+from bson import ObjectId
 
 API_URL = "http://localhost:8080"
 
@@ -31,12 +32,26 @@ def register():
     username = st.text_input("Username", key="reg_username")
     email = st.text_input("Email", key="reg_email")
     password = st.text_input("Password", type="password", key="reg_password")
+    username_exists = None
+    if username:
+        check_resp = requests.get(f"{API_URL}/users/check-username", params={"username": username})
+        if check_resp.status_code == 200:
+            username_exists = check_resp.json().get("exists", False)
+    if username_exists:
+        st.warning("Username already exists. Please choose another.")
     if st.button("Register"):
-        resp = requests.post(f"{API_URL}/auth/register", json={"username": username, "email": email, "password": password})
-        if resp.status_code == 200:
-            st.success("Registered! Please log in.")
+        if username_exists:
+            st.error("Username already exists. Please choose another.")
         else:
-            st.error(resp.json().get("detail", "Registration failed"))
+            resp = requests.post(f"{API_URL}/auth/register", json={"username": username, "email": email, "password": password})
+            if resp.status_code == 200:
+                st.success("Registered! Please log in.")
+            else:
+                try:
+                    detail = resp.json().get("detail", "Registration failed")
+                except Exception:
+                    detail = resp.text or "Registration failed"
+                st.error(detail)
 
 def get_profile():
     if st.session_state.token:
@@ -55,21 +70,36 @@ def logout():
 # --- Event Catalog ---
 def list_events():
     st.subheader("Browse Events")
-    resp = requests.get(f"{API_URL}/events")
+    params = {"is_active": True}
+    resp = requests.get(f"{API_URL}/events", params=params)
     if resp.status_code == 200:
         events = resp.json()
+        user_id = st.session_state.user.get("id") or st.session_state.user.get("_id") if st.session_state.user else None
+        headers = {"Authorization": f"Bearer {st.session_state.token}"} if st.session_state.token else {}
         for ev in events:
-            # Use 'id' if present, else '_id', else fallback to empty string
             event_id = ev.get("id") or ev.get("_id") or ""
-            with st.expander(ev.get("title", str(event_id))):
+            with st.expander(ev.get("title", ev.get('title', ''))):
                 st.write(f"**Description:** {ev.get('description', '')}")
                 st.write(f"**Date:** {ev.get('start_time', '')} to {ev.get('end_time', '')}")
                 st.write(f"**Location:** {ev.get('location', '')}")
                 st.write(f"**Capacity:** {ev.get('capacity', '')}")
                 st.write(f"**Organizer:** {ev.get('organizer_id', 'N/A')}")
-                if st.session_state.token and event_id:
-                    if st.button(f"Book this event", key=f"book_{event_id}"):
-                        book_event(event_id)
+                if st.session_state.token and event_id and ObjectId.is_valid(event_id) and user_id:
+                    # Check if user already booked this event
+                    booking_resp = requests.get(f"{API_URL}/bookings/user/{user_id}/event/{event_id}", headers=headers)
+                    if booking_resp.status_code == 200 and booking_resp.json():
+                        booking = booking_resp.json()
+                        st.success("You have already booked this event.")
+                        if st.button(f"Cancel Booking", key=f"cancel_{event_id}"):
+                            booking_id = booking.get("id") or booking.get("_id")
+                            cancel_resp = requests.delete(f"{API_URL}/bookings/user/{user_id}/event/{event_id}", headers=headers)
+                            if cancel_resp.status_code == 200:
+                                st.success("Booking cancelled!")
+                            else:
+                                st.error(cancel_resp.json().get("detail", "Failed to cancel booking"))
+                    else:
+                        if st.button(f"Book this event", key=f"book_{event_id}"):
+                            book_event(event_id)
     else:
         st.error("Failed to load events")
 
@@ -105,6 +135,10 @@ def create_event():
             st.error(resp.json().get("detail", "Failed to create event"))
 
 def book_event(event_id):
+    # Ensure event_id is a valid ObjectId string before sending
+    if not ObjectId.is_valid(event_id):
+        st.error("Invalid event ID format. Please select a valid event.")
+        return
     headers = {"Authorization": f"Bearer {st.session_state.token}"}
     resp = requests.post(f"{API_URL}/bookings", json={"event_id": event_id}, headers=headers)
     if resp.status_code == 200:
@@ -121,7 +155,15 @@ def my_bookings():
         if resp.status_code == 200:
             bookings = resp.json()
             for b in bookings:
-                st.write(f"Event: {b.get('event_id', b.get('_id', ''))} | Status: {b.get('status', '')} | Booked at: {b.get('created_at', '')}")
+                event_id = b.get('event_id', b.get('_id', ''))
+                st.write(f"Event: {event_id} | Status: {b.get('status', '')} | Booked at: {b.get('created_at', '')}")
+                if b.get('status', '') == 'confirmed':
+                    if st.button(f"Cancel", key=f"cancel_my_{event_id}"):
+                        cancel_resp = requests.delete(f"{API_URL}/bookings/user/{user_id}/event/{event_id}", headers=headers)
+                        if cancel_resp.status_code == 200:
+                            st.success("Booking cancelled!")
+                        else:
+                            st.error(cancel_resp.json().get("detail", "Failed to cancel booking"))
         else:
             st.error("Failed to load bookings")
 
