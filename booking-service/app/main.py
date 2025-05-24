@@ -120,7 +120,7 @@ async def create_booking(
         logger.error(f"Failed to insert booking into Cassandra for event_id={booking.event_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create booking")
 
-    update_success = await update_event_capacity_in_catalog(booking.event_id, increment=True)
+    update_success = await update_event_capacity_in_catalog(booking.event_id, increment=False)
     if not update_success:
         redis_client.decr(key)
         cassandra_session.execute(
@@ -130,7 +130,6 @@ async def create_booking(
         logger.error(f"Failed to update event capacity in event-catalog-service for event_id={booking.event_id}. Booking rolled back.")
         raise HTTPException(status_code=500, detail="Failed to update event capacity. Booking rolled back.")
 
-    # Fetch user info for notification
     AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
     INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "super-secure-api-key")
     user_info = None

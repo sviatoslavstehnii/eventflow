@@ -78,11 +78,12 @@ def list_events():
         headers = {"Authorization": f"Bearer {st.session_state.token}"} if st.session_state.token else {}
         for ev in events:
             event_id = ev.get("id") or ev.get("_id") or ""
+            capacity = ev.get("capacity", 0)
             with st.expander(ev.get("title", ev.get('title', ''))):
                 st.write(f"**Description:** {ev.get('description', '')}")
                 st.write(f"**Date:** {ev.get('start_time', '')} to {ev.get('end_time', '')}")
                 st.write(f"**Location:** {ev.get('location', '')}")
-                st.write(f"**Capacity:** {ev.get('capacity', '')}")
+                st.write(f"**Capacity:** {capacity}")
                 st.write(f"**Organizer:** {ev.get('organizer_id', 'N/A')}")
                 if st.session_state.token and event_id and ObjectId.is_valid(event_id) and user_id:
                     # Check if user already booked this event
@@ -98,8 +99,12 @@ def list_events():
                             else:
                                 st.error(cancel_resp.json().get("detail", "Failed to cancel booking"))
                     else:
-                        if st.button(f"Book this event", key=f"book_{event_id}"):
-                            book_event(event_id)
+                        if capacity <= 0:
+                            st.error("No spaces available for this event.")
+                            st.button(f"Book this event", key=f"book_{event_id}", disabled=True)
+                        else:
+                            if st.button(f"Book this event", key=f"book_{event_id}"):
+                                book_event(event_id)
     else:
         st.error("Failed to load events")
 
